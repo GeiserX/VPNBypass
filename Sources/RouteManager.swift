@@ -163,24 +163,28 @@ final class RouteManager: ObservableObject {
     
     func checkVPNStatus() async {
         let wasVPNConnected = isVPNConnected
+        let oldInterface = vpnInterface
         
         // Use scutil to detect VPN interfaces with IPv4 addresses
         let (connected, interface) = await detectVPNInterface()
         
         isVPNConnected = connected
-        vpnInterface = interface
+        vpnInterface = connected ? interface : nil
         
         // Detect local gateway
         localGateway = await detectLocalGateway()
         
         // Auto-apply routes when VPN connects
         if isVPNConnected && !wasVPNConnected && config.autoApplyOnVPN {
-            log(.info, "VPN connected via \(interface ?? "unknown"), applying routes...")
+            log(.success, "VPN connected via \(interface ?? "unknown"), applying routes...")
             await applyAllRoutes()
         }
         
-        if isVPNConnected {
-            log(.info, "VPN detected: \(interface ?? "unknown") → gateway: \(localGateway ?? "unknown")")
+        // Log disconnection
+        if !isVPNConnected && wasVPNConnected {
+            log(.warning, "VPN disconnected (was: \(oldInterface ?? "unknown"))")
+            // Clear routes when VPN disconnects
+            activeRoutes.removeAll()
         }
     }
     

@@ -42,6 +42,9 @@ struct MenuContent: View {
     
     var body: some View {
         VStack(spacing: 0) {
+            // App title
+            titleHeader
+            
             // Header with VPN status
             headerSection
             
@@ -63,34 +66,86 @@ struct MenuContent: View {
         }
         .padding(16)
         .frame(width: 340)
+        .onAppear {
+            // Refresh VPN status when menu opens
+            routeManager.refreshStatus()
+        }
+    }
+    
+    // MARK: - Title Header
+    
+    private var titleHeader: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "shield.checkered")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [Color(hex: "10B981"), Color(hex: "34D399")],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+            
+            Text("VPN Bypass")
+                .font(.system(size: 15, weight: .bold, design: .rounded))
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [Color.white, Color(hex: "E5E7EB")],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+            
+            Spacer()
+            
+            // Live status indicator
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(routeManager.isVPNConnected ? Color(hex: "10B981") : Color(hex: "EF4444"))
+                    .frame(width: 6, height: 6)
+                    .shadow(color: routeManager.isVPNConnected ? Color(hex: "10B981").opacity(0.6) : Color(hex: "EF4444").opacity(0.6), radius: 3)
+                
+                Text(routeManager.isVPNConnected ? "ON" : "OFF")
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .foregroundColor(routeManager.isVPNConnected ? Color(hex: "10B981") : Color(hex: "EF4444"))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                Capsule()
+                    .fill(routeManager.isVPNConnected ? Color(hex: "10B981").opacity(0.15) : Color(hex: "EF4444").opacity(0.15))
+            )
+        }
+        .padding(.bottom, 12)
     }
     
     // MARK: - Header
     
     private var headerSection: some View {
-        HStack(spacing: 12) {
-            // Status indicator
+        HStack(spacing: 10) {
+            // Status icon
             ZStack {
                 Circle()
-                    .fill(statusColor.opacity(0.2))
-                    .frame(width: 40, height: 40)
+                    .fill(statusColor.opacity(0.15))
+                    .frame(width: 36, height: 36)
                 
-                Image(systemName: routeManager.isVPNConnected ? "shield.checkered" : "shield.slash")
-                    .font(.system(size: 18))
+                Image(systemName: routeManager.isVPNConnected ? "checkmark.shield.fill" : "shield.slash.fill")
+                    .font(.system(size: 16))
                     .foregroundColor(statusColor)
             }
             
             VStack(alignment: .leading, spacing: 2) {
                 Text(routeManager.isVPNConnected ? "VPN Connected" : "VPN Disconnected")
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundColor(statusColor)
                 
-                if let vpnIface = routeManager.vpnInterface {
-                    Text("Interface: \(vpnIface)")
-                        .font(.system(size: 11))
+                if routeManager.isVPNConnected, let vpnIface = routeManager.vpnInterface {
+                    Text("via \(vpnIface)")
+                        .font(.system(size: 10))
                         .foregroundStyle(.secondary)
-                } else {
-                    Text("No tunnel detected")
-                        .font(.system(size: 11))
+                } else if let gateway = routeManager.localGateway {
+                    Text("Gateway: \(gateway)")
+                        .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                 }
             }
@@ -98,15 +153,19 @@ struct MenuContent: View {
             Spacer()
             
             // Active routes badge
-            if !routeManager.activeRoutes.isEmpty {
-                VStack(spacing: 2) {
+            if routeManager.isVPNConnected && !routeManager.activeRoutes.isEmpty {
+                VStack(spacing: 1) {
                     Text("\(routeManager.activeRoutes.count)")
-                        .font(.system(size: 16, weight: .bold, design: .rounded))
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
                         .foregroundColor(Color(hex: "10B981"))
-                    Text("bypassed")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.secondary)
+                    Text("routes")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.tertiary)
                 }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color(hex: "10B981").opacity(0.1))
+                .cornerRadius(8)
             }
         }
     }
@@ -363,7 +422,7 @@ struct MenuContent: View {
     // MARK: - Helpers
     
     private var statusColor: Color {
-        routeManager.isVPNConnected ? Color(hex: "10B981") : Color(hex: "71717A")
+        routeManager.isVPNConnected ? Color(hex: "10B981") : Color(hex: "EF4444")
     }
     
     private func addDomainAndClose() {
