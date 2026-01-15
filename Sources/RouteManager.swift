@@ -189,42 +189,7 @@ final class RouteManager: ObservableObject {
     }
     
     private func detectVPNInterface() async -> (connected: Bool, interface: String?) {
-        // Method 1: Check scutil for VPN interfaces in network info
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/sbin/scutil")
-        process.arguments = ["--nwi"]
-        
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        
-        do {
-            try process.run()
-            process.waitUntilExit()
-            
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let output = String(data: data, encoding: .utf8) ?? ""
-            
-            // Look for utun interfaces with IPv4 addresses in network info
-            // Pattern: "utunX : flags      : 0x5 (IPv4,DNS)"
-            let lines = output.components(separatedBy: "\n")
-            for line in lines {
-                let trimmed = line.trimmingCharacters(in: .whitespaces)
-                // Match utun interfaces that have IPv4 flag
-                if trimmed.hasPrefix("utun") && trimmed.contains(": flags") {
-                    let parts = trimmed.components(separatedBy: ":")
-                    if let ifacePart = parts.first?.trimmingCharacters(in: .whitespaces),
-                       ifacePart.hasPrefix("utun") {
-                        // Check if this interface has IPv4 (VPN indicator)
-                        if line.contains("IPv4") {
-                            return (true, ifacePart)
-                        }
-                    }
-                }
-            }
-        } catch {}
-        
-        // Method 2: Fallback - check ifconfig for utun with inet address
+        // Use ifconfig to detect VPN - more reliable for checking UP flag and IP ranges
         return await detectVPNViaIfconfig()
     }
     
@@ -245,33 +210,37 @@ final class RouteManager: ObservableObject {
             
             // Parse ifconfig output looking for utun interfaces with inet addresses
             var currentInterface: String?
-            var hasInet = false
+            var hasValidIP = false
+            var hasUpFlag = false
             
             for line in output.components(separatedBy: "\n") {
                 // New interface starts with interface name (no leading whitespace)
                 if !line.hasPrefix("\t") && !line.hasPrefix(" ") && line.contains(":") {
-                    // Check if previous interface was a VPN
-                    if let iface = currentInterface, hasInet,
+                    // Check if previous interface was a corporate VPN
+                    if let iface = currentInterface, hasValidIP, hasUpFlag,
                        (iface.hasPrefix("utun") || iface.hasPrefix("ipsec") || 
                         iface.hasPrefix("ppp") || iface.hasPrefix("gpd")) {
                         return (true, iface)
                     }
                     // Start new interface
                     currentInterface = line.components(separatedBy: ":").first
-                    hasInet = false
+                    hasValidIP = false
+                    // Check for UP flag in the flags line
+                    hasUpFlag = line.contains("<UP,") || line.contains(",UP,") || line.contains(",UP>")
                 }
                 
                 // Check for inet (IPv4) address - indicates active VPN
                 if line.contains("inet ") && !line.contains("inet6") {
                     let trimmed = line.trimmingCharacters(in: .whitespaces)
                     if trimmed.hasPrefix("inet ") {
-                        // Extract IP to verify it's a real address
+                        // Extract IP to verify it's a corporate VPN address
                         let parts = trimmed.components(separatedBy: " ")
                         if parts.count >= 2 {
                             let ip = parts[1]
-                            // Skip localhost and link-local
-                            if !ip.hasPrefix("127.") && !ip.hasPrefix("169.254.") {
-                                hasInet = true
+                            // Check if it's a corporate VPN IP (10.x.x.x typically)
+                            // Exclude: localhost, link-local, Tailscale CGNAT (100.64.0.0/10)
+                            if isCorporateVPNIP(ip) {
+                                hasValidIP = true
                             }
                         }
                     }
@@ -279,7 +248,7 @@ final class RouteManager: ObservableObject {
             }
             
             // Check last interface
-            if let iface = currentInterface, hasInet,
+            if let iface = currentInterface, hasValidIP, hasUpFlag,
                (iface.hasPrefix("utun") || iface.hasPrefix("ipsec") || 
                 iface.hasPrefix("ppp") || iface.hasPrefix("gpd")) {
                 return (true, iface)
@@ -287,6 +256,37 @@ final class RouteManager: ObservableObject {
         } catch {}
         
         return (false, nil)
+    }
+    
+    /// Check if IP is likely a corporate VPN (not Tailscale, not localhost, etc.)
+    private func isCorporateVPNIP(_ ip: String) -> Bool {
+        let parts = ip.components(separatedBy: ".")
+        guard parts.count == 4,
+              let first = Int(parts[0]),
+              let second = Int(parts[1]) else {
+            return false
+        }
+        
+        // Skip localhost
+        if first == 127 { return false }
+        
+        // Skip link-local
+        if first == 169 && second == 254 { return false }
+        
+        // Skip Tailscale CGNAT range (100.64.0.0/10 = 100.64-127.x.x)
+        if first == 100 && second >= 64 && second <= 127 { return false }
+        
+        // Corporate VPNs typically use private ranges
+        // 10.0.0.0/8 - Most corporate VPNs use this
+        if first == 10 { return true }
+        
+        // 172.16.0.0/12 (172.16-31.x.x)
+        if first == 172 && second >= 16 && second <= 31 { return true }
+        
+        // 192.168.0.0/16 - Less common for VPN but possible
+        if first == 192 && second == 168 { return true }
+        
+        return false
     }
     
     func detectAndApplyRoutes() {
